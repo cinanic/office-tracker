@@ -15,9 +15,9 @@ from insightface.app import FaceAnalysis
 # CONFIG
 # ============================================================
 CAMERA_SOURCES = {
-    "cam1": "videoplayback (5).mp4",
-    #"cam2": "videoplayback (5).mp4",
-    # add more cameras here
+    "cam1": "your_video_file1.mp4",
+  # "cam2": "your_video_file2.mp4",
+  # add more video files here
 }
 OUTPUT_DIR = "outputs"
 MODEL_PATH = "yolov8m.pt"
