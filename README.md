@@ -9,7 +9,7 @@ face recognition.
 
 | Folder | Stage | Input | Output |
 |---|---|---|---|
-| [`01_video_only/`](01_video_only) | Detection & tracking on a single video file | 1 video file | Anonymous track IDs |
+| [`01_video_only/`](01_video_only) | Detection & tracking on video files | 1 or more video files | Anonymous track IDs |
 | [`02_multi_camera/`](02_multi_camera) | Cross-camera identity re-linking (YOLO vs. Faster R-CNN detector variants) | 2 live/RTSP cameras | Anonymous track IDs (same person, same ID, across both cameras) |
 | [`03_employee_identification/`](03_employee_identification) | Cross-camera tracking + face-based employee recognition | 2 live/RTSP cameras + employee reference photos/videos | The employee's actual name (or `"Unknown"`) |
 
