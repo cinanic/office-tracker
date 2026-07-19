@@ -1,7 +1,7 @@
 # Stage 1 — Video Tracking (single source, no employee names)
 
-`video_tracker.py` (originally `v15.py`) is the earliest version of the
-pipeline. It runs on a **single video file**, not a live camera — the
+`video_tracker.py` is the earliest version of the
+pipeline. It runs on a ** video files**, not a live camera — the
 `CAMERA_SOURCES` dict supports multiple entries, but only one video was
 active (`cam2` was commented out) since this was the initial single-source
 prototype. The body re-ID / face embedding / fused-matching scaffolding was
