@@ -1,0 +1,75 @@
+# config.example.yaml
+#
+# Copy this file to config.yaml (gitignored) and fill in your own camera
+# sources/credentials. Used by stage 2 (multi_camera_tracker_yolo.py /
+# multi_camera_tracker_rcnn.py) and stage 3 (office_tracker.py).
+#
+# NEVER commit config.yaml with real RTSP credentials in it.
+
+log_file: "smart_office.log"
+log_level: "INFO"
+
+reid_ensemble:
+  model_weights:
+    resnet50_ibn_a: "weights/resnet50_ibn_a.pth"
+    osnet: "weights/osnet_x1_0.pth"
+    mobilenetv2: "weights/mobilenetv2.pth"
+  feature_weights:
+    face: 0.40
+    body: 0.30
+    color: 0.15
+    pose: 0.15
+
+tracking:
+  track_buffer_frames: 60
+  new_id_confirm_frames: 5
+  reid_window_seconds: 30
+  max_age: 60          # frames before a track is considered lost
+  min_hits: 3          # minimum hits to confirm a track
+  iou_threshold: 0.5
+
+reid:
+  model: "osnet_x1_0"  # or "resnet50", "osnet_ain_x1_0"
+  threshold: 0.40
+  ensemble: true
+
+face_recognition:
+  model: "buffalo_l"
+  threshold: 0.35
+  min_face_size: 30
+
+gallery:
+  max_embeddings_per_id: 10
+  expiry_seconds: 36000  # 10 hours
+  enable_persistence: true
+
+# Permanent face database (used by the gating app, stage 3)
+face_database:
+  path: "data/main.db"
+  model_name: "VGG-Face"
+  detector_backend: "opencv"
+
+# --- GATING CAMERA (entrance camera, e.g. front door) ---
+gating_camera:
+  id: "cam01_gate"
+  source: "rtsp://<user>:<password>@<gating-camera-ip>/"
+  face_recognition_threshold: 0.40
+
+# --- PERIMETER CAMERAS (secondary cameras) ---
+perimeter_cameras:
+  body_signature_threshold: 0.40
+  reid_stability_grace_period_seconds: 180
+  yolo_model_path: "yolo26n.pt"
+  confidence_threshold: 0.65
+  embedding_strengthening:
+    enabled: false
+    method: "average"
+    history_size: 20
+    update_interval: 5
+  processing_height: 1080
+  cameras:
+    - id: "cam02_perimeter"
+      source: "rtsp://<user>:<password>@<perimeter-camera-ip>/"
+    # Add more cameras as needed:
+    # - id: "cam03_perimeter"
+    #   source: "rtsp://<user>:<password>@<another-camera-ip>/"

@@ -7,11 +7,11 @@ face recognition.
 
 ## Project stages
 
-| Folder | Stage | Cameras | Employee names? |
+| Folder | Stage | Input | Output |
 |---|---|---|---|
-| [`01_single_camera/`](01_single_camera) | Single-camera detection & tracking | 1 | No |
-| [`02_multi_camera/`](02_multi_camera) | Multi-camera identity re-linking (YOLO vs. Faster R-CNN detector variants) | 2 | No |
-| [`03_employee_identification/`](03_employee_identification) | Multi-camera tracking + named employee recognition | 2 | Yes |
+| [`01_video_only/`](01_video_only) | Detection & tracking on a single video file | 1 video file | Anonymous track IDs |
+| [`02_multi_camera/`](02_multi_camera) | Cross-camera identity re-linking (YOLO vs. Faster R-CNN detector variants) | 2 live/RTSP cameras | Anonymous track IDs (same person, same ID, across both cameras) |
+| [`03_employee_identification/`](03_employee_identification) | Cross-camera tracking + face-based employee recognition | 2 live/RTSP cameras + employee reference photos/videos | The employee's actual name (or `"Unknown"`) |
 
 Each stage builds on the previous one. See the README in each folder for
 details on that stage's approach and how to run it.
@@ -32,10 +32,16 @@ source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
 
-You will also need YOLO weights (e.g. `yolov8m.pt` / `yolo26n.pt`, auto-downloaded
-by Ultralytics on first run) and, for stage 3, a folder of employee reference
-photos/videos (not included in this repo — see
-[`03_employee_identification/README.md`](03_employee_identification/README.md)).
+You will also need:
+
+- YOLO weights (e.g. `yolov8m.pt` / `yolo26n.pt`, auto-downloaded by
+  Ultralytics on first run)
+- For stages 2 & 3 (RTSP camera setups): copy `config.example.yaml` to
+  `config.yaml` and fill in your own camera URLs/credentials —
+  `config.yaml` is gitignored so real credentials never get committed
+- For stage 3 only: a folder of employee reference photos/videos (not
+  included in this repo — see
+  [`03_employee_identification/README.md`](03_employee_identification/README.md))
 
 ## Repo contents note
 

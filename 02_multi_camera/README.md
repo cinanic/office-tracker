@@ -25,9 +25,10 @@ detector differs.
 
 ## Configuring
 
-Camera sources default to local webcams (`0`, `0`) for quick testing; point
-them at your own video files or RTSP streams by editing the `camera_sources`
-/ config section near the bottom of each script.
+Both scripts read camera sources from `config.yaml` at the repo root (see
+`config.example.yaml` — copy it to `config.yaml` and fill in your own RTSP
+URLs/credentials, which stay untracked by git). If no `config.yaml` is
+found, they fall back to local webcams (`0`, `0`) for quick testing.
 
 ## Running
 

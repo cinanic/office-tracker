@@ -48,9 +48,10 @@ track whose face embedding is close enough to a known employee
 (`KNOWN_EMPLOYEE_MATCH_THRESHOLD`, default `0.50`) with that person's name;
 everyone else is labeled `"Unknown"`.
 
-Camera sources can be set via a `config.yaml` (see `create_bytetrack_config`
-/ `load_config` in the script for the expected keys — `gating_camera`,
-`perimeter_cameras`) or default to local webcams if no config is found.
+Camera sources are set via `config.yaml` at the repo root (`gating_camera`
+for the entrance camera, `perimeter_cameras` for the rest — see
+`config.example.yaml` for the template) or default to local webcams if no
+config is found.
 
 ## Privacy note
 
