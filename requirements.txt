@@ -1,0 +1,16 @@
+# Core CV / DL
+torch
+torchvision
+opencv-python
+numpy
+scipy
+PyYAML
+
+# Detection & tracking
+ultralytics       # YOLO detector + ByteTrack/BoT-SORT trackers
+supervision       # used by the Faster R-CNN variant (stage 2 rcnn)
+
+# Re-identification & face recognition
+torchreid         # OSNet body re-ID
+insightface       # buffalo_l / ArcFace face embeddings
+onnxruntime       # insightface backend (CPU build; swap for onnxruntime-gpu if using CUDA)

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# Model weights (large, auto-downloaded by ultralytics/torchreid/insightface)
+*.pt
+*.pth
+*.onnx
+weights/
+models/
+
+# Video / image data
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+employee_photos/
+videos/
+footage/
+
+# Generated galleries / state (contain embeddings derived from personal data)
+*.pkl
+gallery_state.pkl
+known_employees.pkl
+
+# Runtime outputs
+outputs/
+*.csv
+*.log
+
+# Config with real camera sources/credentials
+config.yaml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
