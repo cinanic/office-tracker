@@ -16,7 +16,7 @@ from insightface.app import FaceAnalysis
 # ============================================================
 CAMERA_SOURCES = {
     "cam1": "videoplayback (5).mp4",
-   # "cam2": "videoplayback9.mp4",
+    #"cam2": "videoplayback (5).mp4",
     # add more cameras here
 }
 OUTPUT_DIR = "outputs"
@@ -31,20 +31,16 @@ MIN_FACE_DET_SCORE = 0.65
 GALLERY_MAX_EMB_PER_ID = 10
 GALLERY_STALE_SECONDS = 300
 
+FUSED_MATCH_THRESHOLD = 0.35
+FUSED_MATCH_MARGIN = 0.10
 FUSED_WEIGHTS = {"body": 0.55, "color": 0.45, "height": 0.0}
 
-# Same-camera vs cross-camera need different strictness, since cross-camera
-# appearance naturally varies more (angle, lighting, white balance differences
-# between physical cameras).
-FUSED_MATCH_THRESHOLD_SAME_CAM = 0.35
-FUSED_MATCH_THRESHOLD_CROSS_CAM = 0.45
-FUSED_MATCH_MARGIN_SAME_CAM = 0.10
-FUSED_MATCH_MARGIN_CROSS_CAM = 0.06
-
-COLOR_VETO_DISTANCE_SAME_CAM = 0.35
-COLOR_VETO_DISTANCE_CROSS_CAM = 0.50
-BODY_VETO_DISTANCE_SAME_CAM = 0.55
-BODY_VETO_DISTANCE_CROSS_CAM = 0.65
+# NEW: per-signal veto thresholds. If a candidate clearly fails on EITHER
+# signal individually, reject the match even if the combined fused score
+# looked acceptable. This stops a strong body match from "covering for"
+# a clearly different colored outfit, and vice versa.
+COLOR_VETO_DISTANCE = 0.35
+BODY_VETO_DISTANCE = 0.55
 
 CAMERA_TIME_OFFSETS = {
     "cam1": 0.0,
@@ -117,45 +113,31 @@ def cosine_distance(a, b):
     return 1.0 - float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 # ============================================================
-# CLOTHING COLOR HISTOGRAM (white-balance corrected, Hue-only)
+# CLOTHING COLOR HISTOGRAM
 # ============================================================
 def extract_clothing_color_histogram(crop_bgr):
-    """
-    HSV Hue-only histogram for upper/lower body regions, with a simple
-    gray-world white balance correction applied first. This reduces
-    sensitivity to lighting/exposure differences between separate cameras,
-    while still discriminating between genuinely different clothing colors.
-    """
     if crop_bgr.size == 0:
         return None
     h, w = crop_bgr.shape[:2]
     if h < 20 or w < 10:
         return None
 
-    crop = crop_bgr.astype(np.float32)
-    mean_b = crop[:, :, 0].mean()
-    mean_g = crop[:, :, 1].mean()
-    mean_r = crop[:, :, 2].mean()
-    gray_mean = (mean_b + mean_g + mean_r) / 3.0
-    crop[:, :, 0] *= (gray_mean / (mean_b + 1e-6))
-    crop[:, :, 1] *= (gray_mean / (mean_g + 1e-6))
-    crop[:, :, 2] *= (gray_mean / (mean_r + 1e-6))
-    crop = np.clip(crop, 0, 255).astype(np.uint8)
-
-    upper = crop[int(h*0.12):int(h*0.50), :]
-    lower = crop[int(h*0.55):int(h*0.90), :]
+    upper = crop_bgr[int(h*0.12):int(h*0.50), :]
+    lower = crop_bgr[int(h*0.55):int(h*0.90), :]
 
     def region_hist(region):
         if region.size == 0:
-            return np.zeros(16)
+            return np.zeros(32)
         hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-        hist_h = cv2.calcHist([hsv], [0], None, [16], [0, 180]).flatten()
-        norm = np.linalg.norm(hist_h)
-        return hist_h / norm if norm > 0 else hist_h
+        hist_h = cv2.calcHist([hsv], [0], None, [16], [0, 180])
+        hist_s = cv2.calcHist([hsv], [1], None, [16], [0, 256])
+        hist = np.concatenate([hist_h, hist_s]).flatten()
+        norm = np.linalg.norm(hist)
+        return hist / norm if norm > 0 else hist
 
     upper_hist = region_hist(upper)
     lower_hist = region_hist(lower)
-    return np.concatenate([upper_hist, lower_hist])  # length 32
+    return np.concatenate([upper_hist, lower_hist])
 
 def color_distance(a, b):
     if a is None or b is None:
@@ -169,18 +151,15 @@ def compute_height_ratio(box_height, frame_height):
 
 # ============================================================
 # GLOBAL IDENTITY GALLERY
-# Embeddings are stored as (embedding, cam_name) tuples so we can tell
-# whether a candidate match is same-camera or cross-camera and apply
-# the appropriate threshold.
 # ============================================================
 class GlobalGallery:
     def __init__(self):
         self.lock = threading.Lock()
         self.next_id = 1
-        self.face_gallery = {}    # gid -> deque of (emb, cam_name)
+        self.face_gallery = {}
         self.body_gallery = {}
         self.color_gallery = {}
-        self.height_gallery = {}  # gid -> deque of (ratio, cam_name)
+        self.height_gallery = {}
         self.last_seen = {}
         self.track_state = {}
 
@@ -217,13 +196,12 @@ class GlobalGallery:
             pickle.dump(data, f)
         print(f"Saved gallery state to {path}: {len(data['face_gallery'])} identities, next_id={data['next_id']}")
 
-    # ---------- matching helpers ----------
-    def _best_two_face(self, embedding, exclude_ids):
+    def _best_two(self, embedding, gallery_dict, exclude_ids):
         scored = []
-        for gid, emb_list in self.face_gallery.items():
+        for gid, emb_list in gallery_dict.items():
             if gid in exclude_ids:
                 continue
-            for emb, _cam in emb_list:
+            for emb in emb_list:
                 scored.append((gid, cosine_distance(embedding, emb)))
         if not scored:
             return None, 999, 999
@@ -232,108 +210,82 @@ class GlobalGallery:
         second_dist = next((d for gid, d in scored[1:] if gid != best_id), 999)
         return best_id, best_dist, second_dist
 
-    def _confident_face_match(self, embedding, exclude_ids, label):
-        best_id, best_dist, second_dist = self._best_two_face(embedding, exclude_ids)
+    def _confident_match(self, embedding, gallery_dict, threshold, margin_required, exclude_ids, label):
+        best_id, best_dist, second_dist = self._best_two(embedding, gallery_dict, exclude_ids)
         if best_id is None:
             return None
         margin = second_dist - best_dist
         if DEBUG_MATCHING:
             print(f"    [{label}] best=ID{best_id} d={best_dist:.3f} second_d={second_dist:.3f} "
-                  f"margin={margin:.3f} (need d<{FACE_MATCH_THRESHOLD}, margin>={MIN_MARGIN})")
-        if best_dist < FACE_MATCH_THRESHOLD and margin >= MIN_MARGIN:
+                  f"margin={margin:.3f} (need d<{threshold}, margin>={margin_required})")
+        if best_dist < threshold and margin >= margin_required:
             return best_id
         return None
 
-    def _signal_min_dist_with_origin(self, gid, embedding, gallery_dict, dist_fn, current_cam):
-        """
-        Returns (min_distance, is_same_camera) for the best-matching stored
-        embedding of this gid, or (None, None) if no comparable data exists.
-        """
+    def _signal_min_dist(self, gid, embedding, gallery_dict, dist_fn):
+        """Min distance from embedding to any stored embedding for gid. None if no data."""
         if gid not in gallery_dict or len(gallery_dict[gid]) == 0 or embedding is None:
-            return None, None
-        best_d, best_same_cam = None, None
-        for emb, stored_cam in gallery_dict[gid]:
-            d = dist_fn(embedding, emb)
-            if d is None:
-                continue
-            if best_d is None or d < best_d:
-                best_d = d
-                best_same_cam = (stored_cam == current_cam)
-        return best_d, best_same_cam
+            return None
+        dists = [dist_fn(embedding, e) for e in gallery_dict[gid]]
+        dists = [d for d in dists if d is not None]
+        return min(dists) if dists else None
 
-    def _fused_score(self, gid, body_emb, color_hist, height_ratio, current_cam):
+    def _fused_score(self, gid, body_emb, color_hist, height_ratio):
         parts, weights = [], []
-        any_same_cam = False
-        saw_any_signal = False
 
-        body_d, body_same = self._signal_min_dist_with_origin(
-            gid, body_emb, self.body_gallery, cosine_distance, current_cam)
+        body_d = self._signal_min_dist(gid, body_emb, self.body_gallery, cosine_distance)
         if body_d is not None:
             parts.append(body_d); weights.append(FUSED_WEIGHTS["body"])
-            saw_any_signal = True
-            any_same_cam = any_same_cam or body_same
 
-        color_d, color_same = self._signal_min_dist_with_origin(
-            gid, color_hist, self.color_gallery, color_distance, current_cam)
+        color_d = self._signal_min_dist(gid, color_hist, self.color_gallery, color_distance)
         if color_d is not None:
             parts.append(color_d); weights.append(FUSED_WEIGHTS["color"])
-            saw_any_signal = True
-            any_same_cam = any_same_cam or color_same
 
-        if not saw_any_signal:
-            return None, None, None, None
+        if FUSED_WEIGHTS["height"] > 0 and height_ratio is not None and \
+           gid in self.height_gallery and len(self.height_gallery[gid]) > 0:
+            avg_h = float(np.mean(self.height_gallery[gid]))
+            d = min(abs(height_ratio - avg_h) / max(avg_h, 0.01), 1.0)
+            parts.append(d); weights.append(FUSED_WEIGHTS["height"])
 
+        if not parts:
+            return None, None, None
         total_weight = sum(weights)
         fused = sum(p * w for p, w in zip(parts, weights)) / total_weight
-        return fused, body_d, color_d, any_same_cam
+        return fused, body_d, color_d
 
-    def _match_fused(self, body_emb, color_hist, height_ratio, current_cam, exclude_ids, label):
+    def _match_fused(self, body_emb, color_hist, height_ratio, exclude_ids, threshold, margin_required, label):
         candidate_ids = set(self.body_gallery.keys()) | set(self.color_gallery.keys())
-        scored = []  # (gid, fused_score, body_d, color_d, is_same_cam)
+        scored = []  # (gid, fused_score, body_d, color_d)
         for gid in candidate_ids:
             if gid in exclude_ids:
                 continue
-            fused, body_d, color_d, is_same_cam = self._fused_score(
-                gid, body_emb, color_hist, height_ratio, current_cam)
+            fused, body_d, color_d = self._fused_score(gid, body_emb, color_hist, height_ratio)
             if fused is not None:
-                scored.append((gid, fused, body_d, color_d, is_same_cam))
+                scored.append((gid, fused, body_d, color_d))
 
         if not scored:
             return None
         scored.sort(key=lambda x: x[1])
-        best_id, best_score, best_body_d, best_color_d, is_same_cam = scored[0]
+        best_id, best_score, best_body_d, best_color_d = scored[0]
         second_score = scored[1][1] if len(scored) > 1 else 999
         margin = second_score - best_score
 
-        # pick thresholds based on whether the best evidence came from the same camera
-        if is_same_cam:
-            fused_threshold = FUSED_MATCH_THRESHOLD_SAME_CAM
-            margin_required = FUSED_MATCH_MARGIN_SAME_CAM
-            color_veto = COLOR_VETO_DISTANCE_SAME_CAM
-            body_veto = BODY_VETO_DISTANCE_SAME_CAM
-        else:
-            fused_threshold = FUSED_MATCH_THRESHOLD_CROSS_CAM
-            margin_required = FUSED_MATCH_MARGIN_CROSS_CAM
-            color_veto = COLOR_VETO_DISTANCE_CROSS_CAM
-            body_veto = BODY_VETO_DISTANCE_CROSS_CAM
-
         if DEBUG_MATCHING:
-            scope = "same-cam" if is_same_cam else "cross-cam"
-            print(f"    [{label}/{scope}] best=ID{best_id} score={best_score:.3f} second={second_score:.3f} "
-                  f"margin={margin:.3f} body_d={best_body_d} color_d={best_color_d} "
-                  f"(need score<{fused_threshold}, margin>={margin_required}, "
-                  f"color_veto<{color_veto}, body_veto<{body_veto})")
+            print(f"    [{label}] best=ID{best_id} score={best_score:.3f} second={second_score:.3f} "
+                  f"margin={margin:.3f} body_d={best_body_d} color_d={best_color_d}")
 
-        if best_color_d is not None and best_color_d > color_veto:
+        # VETO: if either individual signal is a clear mismatch, reject
+        # regardless of how good the combined fused score looks.
+        if best_color_d is not None and best_color_d > COLOR_VETO_DISTANCE:
             if DEBUG_MATCHING:
-                print(f"    [{label}] VETOED -- color_d={best_color_d:.3f} exceeds {color_veto}")
+                print(f"    [{label}] VETOED -- color_d={best_color_d:.3f} exceeds veto threshold {COLOR_VETO_DISTANCE}")
             return None
-        if best_body_d is not None and best_body_d > body_veto:
+        if best_body_d is not None and best_body_d > BODY_VETO_DISTANCE:
             if DEBUG_MATCHING:
-                print(f"    [{label}] VETOED -- body_d={best_body_d:.3f} exceeds {body_veto}")
+                print(f"    [{label}] VETOED -- body_d={best_body_d:.3f} exceeds veto threshold {BODY_VETO_DISTANCE}")
             return None
 
-        if best_score < fused_threshold and margin >= margin_required:
+        if best_score < threshold and margin >= margin_required:
             return best_id
         return None
 
@@ -360,7 +312,6 @@ class GlobalGallery:
                 }
                 self.track_state[key] = state
 
-            # ---- CASE 1: already locked ----
             if state["global_id"] is not None:
                 gid = state["global_id"]
 
@@ -373,19 +324,18 @@ class GlobalGallery:
                     gid = new_gid
 
                 if face_emb is not None:
-                    self.face_gallery[gid].append((face_emb, cam_name))
+                    self.face_gallery[gid].append(face_emb)
                 if body_emb is not None:
-                    self.body_gallery[gid].append((body_emb, cam_name))
+                    self.body_gallery[gid].append(body_emb)
                 if color_hist is not None:
-                    self.color_gallery[gid].append((color_hist, cam_name))
+                    self.color_gallery[gid].append(color_hist)
                 if height_ratio is not None:
-                    self.height_gallery[gid].append((height_ratio, cam_name))
+                    self.height_gallery[gid].append(height_ratio)
 
                 self.last_seen[gid] = timestamp
                 used_ids_this_frame.add(gid)
                 return gid
 
-            # ---- CASE 2: still deciding -> buffer evidence ----
             if face_emb is not None:
                 state["pending_face"].append(face_emb)
             if body_emb is not None:
@@ -398,16 +348,17 @@ class GlobalGallery:
             total_evidence = len(state["pending_face"]) + len(state["pending_body"])
 
             if face_emb is not None:
-                gid = self._confident_face_match(face_emb, used_ids_this_frame, "face-early")
+                gid = self._confident_match(face_emb, self.face_gallery, FACE_MATCH_THRESHOLD,
+                                             MIN_MARGIN, used_ids_this_frame, "face-early")
                 if gid is not None:
                     state["global_id"] = gid
-                    self.face_gallery[gid].append((face_emb, cam_name))
+                    self.face_gallery[gid].append(face_emb)
                     if body_emb is not None:
-                        self.body_gallery[gid].append((body_emb, cam_name))
+                        self.body_gallery[gid].append(body_emb)
                     if color_hist is not None:
-                        self.color_gallery[gid].append((color_hist, cam_name))
+                        self.color_gallery[gid].append(color_hist)
                     if height_ratio is not None:
-                        self.height_gallery[gid].append((height_ratio, cam_name))
+                        self.height_gallery[gid].append(height_ratio)
                     self.last_seen[gid] = timestamp
                     used_ids_this_frame.add(gid)
                     return gid
@@ -415,7 +366,6 @@ class GlobalGallery:
             if total_evidence < DECISION_BUFFER_SIZE:
                 return -1 * ((hash(key) % 100000) + 1)
 
-            # ---- CASE 3: buffer full -> final decision ----
             avg_face = None
             if state["pending_face"]:
                 avg_face = np.mean(state["pending_face"], axis=0)
@@ -436,23 +386,26 @@ class GlobalGallery:
 
             gid = None
             if avg_face is not None:
-                gid = self._confident_face_match(avg_face, used_ids_this_frame, "face-final")
+                gid = self._confident_match(avg_face, self.face_gallery, FACE_MATCH_THRESHOLD,
+                                             MIN_MARGIN, used_ids_this_frame, "face-final")
 
             if gid is None:
-                gid = self._match_fused(avg_body, avg_color, avg_height, cam_name,
-                                         used_ids_this_frame, label="fused-final")
+                gid = self._match_fused(avg_body, avg_color, avg_height, used_ids_this_frame,
+                                         threshold=FUSED_MATCH_THRESHOLD,
+                                         margin_required=FUSED_MATCH_MARGIN,
+                                         label="fused-final")
 
             if gid is None:
                 gid = self._create_new_id()
 
             for f in state["pending_face"]:
-                self.face_gallery[gid].append((f, cam_name))
+                self.face_gallery[gid].append(f)
             for b in state["pending_body"]:
-                self.body_gallery[gid].append((b, cam_name))
+                self.body_gallery[gid].append(b)
             for c in state["pending_color"]:
-                self.color_gallery[gid].append((c, cam_name))
+                self.color_gallery[gid].append(c)
             for h in state["pending_height"]:
-                self.height_gallery[gid].append((h, cam_name))
+                self.height_gallery[gid].append(h)
 
             state["global_id"] = gid
             state["pending_face"] = []
